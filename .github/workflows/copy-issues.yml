@@ -1,0 +1,55 @@
+name: Copy issues to a new repository
+
+# Copies this repo's labels, milestones and OPEN issues into another repo.
+# Close an issue here to retire it from the template.
+on:
+  workflow_dispatch:
+    inputs:
+      dest:
+        description: 'Destination repository: owner/repo, or just the repo name to use this org'
+        required: true
+        type: string
+      dry_run:
+        description: 'Preview only: read this repo, write nothing'
+        required: true
+        type: boolean
+        default: true
+
+# The default GITHUB_TOKEN only needs to read this repo's issues. Writing to the
+# destination uses the DEST_GH_TOKEN secret, because GITHUB_TOKEN cannot write to
+# other repositories.
+permissions:
+  contents: read
+  issues: read
+
+# Two simultaneous runs against the same destination would duplicate issues.
+concurrency:
+  group: copy-issues-${{ inputs.dest }}
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy labels, milestones and issues
+        env:
+          SOURCE_GH_TOKEN: ${{ github.token }}
+          DEST_GH_TOKEN: ${{ secrets.DEST_GH_TOKEN }}
+          # Passed via env, never interpolated into the script body (injection safe).
+          DEST_INPUT: ${{ inputs.dest }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          dest="$DEST_INPUT"
+          [[ "$dest" == */* ]] || dest="${GITHUB_REPOSITORY_OWNER}/${dest}"
+
+          if [[ "$DRY_RUN" != "true" && -z "$DEST_GH_TOKEN" ]]; then
+            echo "::error::Secret DEST_GH_TOKEN is not set. Create a fine-grained PAT with Issues + Metadata read/write on the destination repo and add it as a repository secret."
+            exit 1
+          fi
+
+          args=(--source "$GITHUB_REPOSITORY" --dest "$dest")
+          [[ "$DRY_RUN" == "true" ]] && args+=(--dry-run)
+          ./scripts/copy-issues.sh "${args[@]}"
